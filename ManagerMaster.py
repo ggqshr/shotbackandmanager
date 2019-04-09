@@ -6,8 +6,24 @@
 """
 import atexit
 import os
+from io import TextIOWrapper
 from time import sleep
 import platform
+
+DATA_SAVE_FILE_PATH = "./.save_information.data"
+data_save_file: TextIOWrapper = None
+
+
+@atexit.register
+def clean_func():
+    """
+    退出的时候关闭文件
+    :return:
+    """
+    if data_save_file is not None:  # type:
+        if not data_save_file.closed:
+            data_save_file.flush()
+            data_save_file.close()
 
 
 class DataType():
@@ -31,19 +47,54 @@ class DataType():
         return self.__str__()
 
 
-# f = open("./.save_information.data", "a", encoding="utf-8")
+f = open("./.save_information.data", "a", encoding="utf-8")
+
+
 # f.write(s.__str__() + "\n")
 # f.flush()
 # f.close()
 #
 # print('This is a \033[1;35;47m{text}\033[0m!')
+def save2file(data: DataType) -> None:
+    """
+    将传入的DataType对象的信息存入文件
+    :param data: 要存入文件的对象
+    :return:
+    """
+    data_save_file.write(data.__str__() + "/n")
+    data_save_file.flush()
+
+
+def file2data() -> list[DataType]:
+    data_type_list = []
+    for data in data_save_file.readlines():
+        propertys = data.split("\t")
+        obj = DataType(propertys[0], propertys[1], propertys[2], propertys[3], propertys[4])
+        data_type_list.append(obj)
+    return data_type_list
+
+
+def del_line_by_line_nums(num_of_line):
+    with open('in.txt') as fp_in:
+        with open('out.txt', 'w') as fp_out:
+            fp_out.writelines(line for i, line in enumerate(fp_in) if i != 10)
 
 
 def ShowPrompt():
     os.system("clear" if platform.system() == "Linux" else "cls")  # 清屏
 
-    print('\033[1;35m{text}\033[0m!'.format(text="Welcome to the shotback manager!"))
-    print("*".center(50))
+    print('\033[1;35m{text}\033[0m'.format(text="Welcome to the shotback manager!").rjust(82))
+    print(("*" * 50).rjust(80))
+    print("".rjust(47) + "1.添加新的连接", end="\n")
+    print("".rjust(47) + "2.查看当前已有的连接", end="\n")
+    print("".rjust(47) + "3.退出", end="\n")
+    print(("*" * 50).rjust(80))
+    option = input("Please input your option:")
+    if option == "3":
+        print("bye")
+        return
+    if option == "1":
+        os.system("clear" if platform.system() == "Linux" else "cls")  # 清屏
 
 
 if __name__ == '__main__':
