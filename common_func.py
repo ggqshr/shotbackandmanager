@@ -146,6 +146,7 @@ class SocketBridge(object):
         self.send_buff = {}  # buff one packet for those sending too-fast socket
 
         if selectors:
+            # 选择器
             self.sel = selectors.DefaultSelector()
         else:
             self.sel = None
@@ -165,19 +166,21 @@ class SocketBridge(object):
         conn2.setblocking(False)
 
         # mark as readable+writable
+        # 互相作为读写对象
         self.conn_rd.add(conn1)
         self.conn_wr.add(conn1)
         self.conn_rd.add(conn2)
         self.conn_wr.add(conn2)
 
         # record sockets pairs
+        # 记录两个socket之间的关系，即哪两个socket是对应的
         self.map[conn1] = conn2
         self.map[conn2] = conn1
 
         # record callback
         if callback is not None:
             self.callbacks[conn1] = callback
-
+        # 如果选择器存在,就给这两个socket注册写和读的时间监听，因为无法确定哪个先写或者先读
         if self.sel:
             self.sel.register(conn1, EVENT_READ_WRITE)
             self.sel.register(conn2, EVENT_READ_WRITE)
@@ -207,13 +210,16 @@ class SocketBridge(object):
                 continue
 
             # blocks until there is socket(s) ready for .recv
-            # notice: sockets which were closed by remote,
-            #   are also regarded as read-ready by select()
+            # notice: sockets which were closed by remote,are also regarded as read-ready by select()
             if self.sel:
+                # 最多等待0.5秒，如果超时没有的话，就返回空。
                 events = self.sel.select(0.5)
+                # 将其中所有的读就绪的文件选出
                 socks_rd = tuple(key.fileobj for key, mask in events if mask & EVENT_READ)
+                # 选出所有的写就绪的文件
                 socks_wr = tuple(key.fileobj for key, mask in events if mask & EVENT_WRITE)
             else:
+                # 对应的是sel没有的情况，如果没有，则需要在这里构造一个
                 r, w, _ = select.select(self.conn_rd, self.conn_wr, [], 0.5)
                 socks_rd = tuple(r)
                 socks_wr = tuple(w)
@@ -231,6 +237,7 @@ class SocketBridge(object):
                     continue
 
                 try:
+                    # 接收的信息
                     received = s.recv(RECV_BUFFER_SIZE)
                     # log.debug('recved %s from %s', len(received), s)
                 except Exception as e:
@@ -249,28 +256,37 @@ class SocketBridge(object):
                     self._rd_shutdown(s)
                     continue
                 else:
+                    # 取出从当前socket发送过来的数据，然后将其和对应的socket对应起来，方便后续进行发送
                     self.send_buff[self.map[s]] = received
 
             # ----------------- SENDING ----------------
+            # 取出每一个已经写就绪的socket
             for s in socks_wr:
+                # 如果取出的socket没有要发送的数据，
                 if s not in self.send_buff:
+                    # 如果没有和他配对的socket或者已经配对的socket已经被处理，就把当前的socket关闭，然后继续处理下一个socket
                     if self.map.get(s) not in self.conn_rd:
                         self._wr_shutdown(s)
                     continue
+                # 取出当前socket要发送的数据
                 data = self.send_buff.pop(s)
                 try:
+                    # 发送数据
                     s.send(data)
                     # log.debug('sent %s to %s', len(data), s)
                 except Exception as e:
+                    # 防止ssl错误和警报
                     if ssl and isinstance(e, (ssl.SSLWantReadError, ssl.SSLWantWriteError)):
                         # log.warning('got %s, wait to write then', repr(e))
                         self.send_buff[s] = data  # write back for next write
                         continue
                     # unable to send, close connection
                     log.warning('error sending socket %s, %s closing', repr(e), s)
+                    # 如果出错，将socket写状态关闭，然后将其对应的socket从写队列中删除，并且将其从所有队列中除去
                     self._wr_shutdown(s)
                     continue
 
+    # 如果当前文件的状态是自定义标记，就将其转换成特定读或者写，如果是单纯的读或者写，就直接取消这个监听器
     def _sel_disable_event(self, conn, ev):
         try:
             _key = self.sel.get_key(conn)  # type:selectors.SelectorKey
@@ -278,10 +294,12 @@ class SocketBridge(object):
             pass
         else:
             if _key.events == EVENT_READ_WRITE:
+                # 转换监听的状态，如果当前是读，就变为写，如果是写，就变为读
                 self.sel.modify(conn, EVENT_READ_WRITE ^ ev)
             else:
                 self.sel.unregister(conn)
 
+    # 如果一个连接写的数据读完了，那么就把他转化成写就绪准备对其写入
     def _rd_shutdown(self, conn, once=False):
         """action when connection should be read-shutdown
         :type conn: socket.socket
@@ -295,15 +313,16 @@ class SocketBridge(object):
         #     del self.send_buff[conn]
 
         try:
+            # 关闭读的功能，不能使用read or recv等功能
             conn.shutdown(socket.SHUT_RD)
         except:
             pass
-
+        # 默认是将当前socket对应的socket转换成读状态
         if not once and conn in self.map:  # use the `once` param to avoid infinite loop
             # if a socket is rd_shutdowned, then it's
             #   pair should be wr_shutdown.
             self._wr_shutdown(self.map[conn], True)
-
+        # 如果当前socket和对应的socket都被读过了，说明这一次的数据交换已经结束，则应该关闭这两个socket
         if self.map.get(conn) not in self.conn_rd:
             # if both two connection pair was rd-shutdowned,
             #   this pair sockets are regarded to be completed
@@ -311,24 +330,30 @@ class SocketBridge(object):
             self._terminate(conn)
 
     def _wr_shutdown(self, conn, once=False):
+        # 将写完的socket关闭
         """action when connection should be write-shutdown
         :type conn: socket.socket
         """
         try:
+            # 关闭当前socket写的功能，不能使用send/write等
             conn.shutdown(socket.SHUT_WR)
         except:
             pass
 
+        # 如果当前socket在连接的写列表中
         if conn in self.conn_wr:
+            # 把他从列表中去除
             self.conn_wr.remove(conn)
+            # 然后讲绑定到他的监听器取消
             if self.sel:
                 self._sel_disable_event(conn, EVENT_WRITE)
-
+        # 下面的if只有在当前的socket已经被处理完成后，主动调用这个函数，将他的对应的socket转换状态
         if not once and conn in self.map:  # use the `once` param to avoid infinite loop
             #   pair should be rd_shutdown.
             # if a socket is wr_shutdowned, then it's
             self._rd_shutdown(self.map[conn], True)
 
+    # 用来关闭连接，并且将监听器取消，且将他对应的socket也调用这个函数
     def _terminate(self, conn, once=False):
         """terminate a sockets pair (two socket)
         :type conn: socket.socket

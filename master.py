@@ -48,6 +48,7 @@ NbE3PCsO3NNtnc3Oj96HCww2MeC0ro9j0uDkyl+0zx47UeFUDqqSFJZ3bQa8j0w=
 '''
 
 
+# 此注解注解的函数是程序即将结束的时候调用的回调函数，用来释放资源
 @atexit.register
 def close_listening_socket_at_exit():
     log.info("exiting...")
@@ -77,21 +78,24 @@ class Master(object):
                  ):
         """
 
-        :param customer_listen_addr: equals to the -c/--customer param
-        :param communicate_addr: equals to the -m/--master param
+        :param customer_listen_addr: equals to the -c/--customer param 对外部暴露的端口，另外一台机器可以通过这个Master上的这个
+        端口来访问内网内的主机
+        :param communicate_addr: equals to the -m/--master param  在Master上监听的端口，内网内的主机通过这个端口和Master建立隧道
         """
+        # 线程池
         self.thread_pool = {}
         self.thread_pool["spare_slaver"] = {}
         self.thread_pool["working_slaver"] = {}
 
         self.working_pool = working_pool or {}
-
+        # 交换两个socket之间的信息
         self.socket_bridge = SocketBridge()
-
+        # 如果一个customers请求连接内网内的一台主机，但是现在还没有slave和master建立连接，就将customer加入到一个队列中
         # a queue for customers who have connected to us,
         #   but not assigned a slaver yet
         self.pending_customers = queue.Queue()
-
+        # 如果要求使用ssl加密传输，这里是用来构造ssl
+        # todo 以后在看
         if ssl:
             self.ssl_context = self._make_ssl_context()
             self.ssl_avail = self.ssl_context is not None
@@ -100,7 +104,7 @@ class Master(object):
             self.ssl_context = None
 
         self.communicate_addr = communicate_addr
-
+        """(host, int(port)) --> "host:port" """
         _fmt_communicate_addr = fmt_addr(self.communicate_addr)
 
         if slaver_pool:
@@ -111,8 +115,11 @@ class Master(object):
         else:
             # 自己listen来获取slaver
             self.external_slaver = False
+            # 双向列表，加快pop和append的速度
             self.slaver_pool = collections.deque()
             # prepare Thread obj, not activated yet
+            # 往线程池中放入线程，传入要调用的参数以及线程的名字和是否为守护进程
+            # 如果这时候有slave
             self.thread_pool["listen_slaver"] = threading.Thread(
                 target=self._listen_slaver,
                 name="listen_slaver-{}".format(_fmt_communicate_addr),
@@ -222,6 +229,8 @@ class Master(object):
             使得一轮循环的时间小于TTL,
             保证每个slaver都在过期前能被心跳保活
         """
+        # //是整数除法
+        # slave最多是10个，则spare_slave_ttl默认为300，
         default_delay = 5 + SPARE_SLAVER_TTL // 12
         delay = default_delay
         log.info("heart beat daemon start, delay: {}s".format(delay))
@@ -238,8 +247,7 @@ class Master(object):
                 continue
             else:
                 # notice this `slaver_count*2 + 1`
-                # slaver will expire and re-connect if didn't receive
-                #   heartbeat pkg after SPARE_SLAVER_TTL seconds.
+                # slaver will expire and re-connect if didn't receive heartbeat pkg after SPARE_SLAVER_TTL seconds.
                 # set delay to be short enough to let every slaver receive heartbeat
                 #   before expire
                 delay = 1 + SPARE_SLAVER_TTL // max(slaver_count * 2 + 1, 12)
@@ -247,9 +255,11 @@ class Master(object):
             # pop the oldest slaver
             #   heartbeat it and then put it to the end of queue
             slaver = self.slaver_pool.popleft()
+            # 获得slave的地址
             addr_slaver = slaver["addr_slaver"]
 
             # ------------------ real heartbeat begin --------------------
+            # 这里调用一个perf_counter函数，记录时间点A
             start_time = time.perf_counter()
             try:
                 hb_result = self._send_heartbeat(slaver["conn_slaver"])
@@ -259,23 +269,26 @@ class Master(object):
                 log.debug(traceback.format_exc())
                 hb_result = False
             finally:
+                # 这里在调用一次perf_counter，记录时间点B，这样就可以计算A和B之间的时间差
                 time_used = round((time.perf_counter() - start_time) * 1000.0, 2)
             # ------------------ real heartbeat end ----------------------
-
+            # 如果心跳失败
             if not hb_result:
                 log.warning("heart beat failed: {}, time: {}ms".format(
                     fmt_addr(addr_slaver), time_used))
+                # 将失败的slave关闭
                 try_close(slaver["conn_slaver"])
                 del slaver["conn_slaver"]
 
                 # if heartbeat failed, start the next heartbeat immediately
-                #   because in most cases, all 5 slaver connection will
-                #   fall and re-connect in the same time
+                #   because in most cases, all 5 slaver connection will fall and re-connect in the same time
+                # 立马进行下一次心跳，
                 delay = 0
-
+            # 心跳成功
             else:
                 log.debug("heartbeat success: {}, time: {}ms".format(
                     fmt_addr(addr_slaver), time_used))
+                # 重新将其加入到队列的头部
                 self.slaver_pool.append(slaver)
 
     def _handshake(self, conn_slaver):
@@ -311,12 +324,13 @@ class Master(object):
 
         if not correct:
             return None
-
+        # 不起用ssl加密
         if not self.ssl_avail or pkg.data[1] == CtrlPkg.SSL_FLAG_NONE:
             if self.ssl_avail:
                 log.warning('client %s not enabled SSL, fallback to plain.', conn_slaver.getpeername())
             return conn_slaver
         else:
+            # 启用加密
             ssl_conn_slaver = self.ssl_context.wrap_socket(conn_slaver, server_side=True)  # type: ssl.SSLSocket
             log.debug('ssl established slaver: %s', ssl_conn_slaver.getpeername())
             return ssl_conn_slaver
@@ -358,6 +372,7 @@ class Master(object):
         """assign slaver for customer"""
         while True:
             # get a newly connected customer
+            # 使用阻塞队列，如果队列中没有元素会阻塞在这里
             conn_customer, addr_customer = self.pending_customers.get()
 
             try:
@@ -389,12 +404,18 @@ class Master(object):
 
     def _listen_slaver(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # slave通过communicate_addr地址和master建立练习，现在监听他就是为了寻找slave建立联系
         try_bind_port(sock, self.communicate_addr)
+        # 设置在关闭socket的时候离开关闭，不会占用端口
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # 指定10个连接
         sock.listen(10)
+        # 为了在程序结束时释放资源使用，将socket记录一下
         _listening_sockets.append(sock)
         log.info("Listening for slavers: {}".format(
             fmt_addr(self.communicate_addr)))
         while True:
+            # 将监听到的slave加入到slaver_pool中
             conn, addr = sock.accept()
             self.slaver_pool.append({
                 "addr_slaver": addr,
@@ -407,7 +428,9 @@ class Master(object):
     def _listen_customer(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try_bind_port(sock, self.customer_listen_addr)
+        # 最后连接20个socket
         sock.listen(20)
+        # 为了在结束时候释放连接
         _listening_sockets.append(sock)
         log.info("Listening for customers: {}".format(
             fmt_addr(self.customer_listen_addr)))

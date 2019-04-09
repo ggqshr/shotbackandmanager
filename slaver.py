@@ -132,7 +132,6 @@ class Slaver(object):
 
             elif pkg.pkg_type == CtrlPkg.PTYPE_HS_M2S:
                 # 拿到了开始传输的握手包, 进入工作阶段
-
                 break
 
         # send slaver hello --> master
@@ -171,7 +170,9 @@ class Slaver(object):
         log.info("slaver complete: {}".format(addr_slaver))
 
     def _slaver_working(self, conn_slaver):
+        # 获得自己的地址
         addr_slaver = conn_slaver.getsockname()
+        # 获得远程master的地址
         addr_master = conn_slaver.getpeername()
 
         # --------- handling CtrlPkg until handshake -------------
@@ -250,6 +251,7 @@ class Slaver(object):
         default_spare_delay = 0.08
 
         while True:
+            # 默认是对于一个slave设置五个链接
             if len(self.spare_slaver_pool) >= self.max_spare_count:
                 time.sleep(spare_delay)
                 spare_delay = (spare_delay + default_spare_delay) / 2.0
