@@ -54,6 +54,16 @@ class DataType():
         return other.master_port == self.master_port and other.customer_port == self.customer_port
 
 
+def get_random_port_never_use():
+    all_data = file2data()
+    all_use_port = set([data.master_port for data in all_data])
+    import random
+    port = random.randint(10000, 20000)
+    while port in all_use_port:
+        port = random.randint(10000, 20000)
+    return port
+
+
 def save2file(data: DataType) -> None:
     """
     将传入的DataType对象的信息存入文件
@@ -104,7 +114,15 @@ def close_process_and_del_file(num_of_line, data) -> str:
 
 def insert_new_connects() -> str:
     blank_str = "".rjust(47)
-    master_port = input(blank_str + "请输入主机监听slave的端口> ")
+    option = input(blank_str + "帮我选请输入{key1}，自己选请输入{key2} > ".format(
+        key1='\033[1;36m{text}\033[0m'.format(text=1),
+        key2='\033[1;34m{text}\033[0m'.format(text=0)
+    ))
+    if option == "1":
+        master_port = get_random_port_never_use()
+        print(blank_str + "帮你选择的Master端口为：{key}".format(key='\033[1;32m{text}\033[0m'.format(text=master_port)))
+    else:
+        master_port = input(blank_str + "请输入主机监听slave的端口> ")
     customer_port = input(blank_str + "请输入服务Customer的端口> ")
     message = input(blank_str + "请输入备注> ")
     dataList = file2data()
