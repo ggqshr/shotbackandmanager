@@ -428,6 +428,7 @@ class Master(object):
     def _listen_customer(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try_bind_port(sock, self.customer_listen_addr)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         # 最后连接20个socket
         sock.listen(20)
         # 为了在结束时候释放连接
